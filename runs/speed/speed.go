@@ -15,9 +15,10 @@ func main() {
 	if err != nil {
 		log.Fatalln("Failed to start listening: ", err)
 	}
+	log.Println("Listening for tcp connections on port 3000")
 
-	go HandleLostTickets(getDatabase().LostTicketsChan, getDatabase().NewDispatcherChan)
-	go PlateScanner(getDatabase().PlateChan)
+	go HandleLostTickets(Db().LostTicketsChan, Db().NewDispatcherChan)
+	go PlateScanner(Db().PlateChan)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -138,7 +139,7 @@ func PlateScanner(plateChan chan *Plate) {
 		dispatcherSession := GetSessionByRoad(ticket.Road)
 		if dispatcherSession == nil {
 			log.Println("Couldn't find dispatcher for road: ", ticket.Road)
-			getDatabase().LostTicketsChan <- ticket
+			Db().LostTicketsChan <- ticket
 			continue
 		}
 
@@ -174,7 +175,7 @@ func (s *Session) HandlePlate() error {
 	}
 
 	InsertPlate(plate)
-	getDatabase().PlateChan <- &plate
+	Db().PlateChan <- &plate
 	return nil
 }
 
