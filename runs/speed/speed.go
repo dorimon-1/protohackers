@@ -146,8 +146,8 @@ func PlateScanner(plateChan chan *Plate) {
 			continue
 		}
 
-		DeleteTicket(ticket.PlateNumber, ticket.Index1)
-		DeleteTicket(ticket.PlateNumber, ticket.Index2)
+		DeletePlate(ticket.PlateNumber, ticket.Index1)
+		DeletePlate(ticket.PlateNumber, ticket.Index2)
 
 		dispatcherSession := GetSessionByRoad(ticket.Road)
 		if dispatcherSession == nil {
