@@ -31,6 +31,8 @@ func main() {
 	}
 }
 
+// HandleConnection is the main func for each connection
+// It reads the first byte from Conn, determines the MessageType and calls the next func accordingly
 func (s *Session) HandleConnection() {
 	defer func() {
 		s.Conn.Close()
@@ -69,6 +71,9 @@ func (s *Session) HandleConnection() {
 	}
 }
 
+// ScanPlate accepts a *Plate as a paramater and returns a *Ticket
+// It scans the given plate for a potential tickets by getting past plates and calculating average speed between those 2 Plates
+// it also makes sure it didn't receive a ticket within the same days range.
 func ScanPlate(p *Plate) *Ticket {
 	log.Println("Started scanning plate: ", p.String())
 	plates := GetPlates(p.PlateNumber)
@@ -89,8 +94,8 @@ func ScanPlate(p *Plate) *Ticket {
 		time = time / 3600
 
 		averageSpeed := distance / time
-
-		if float64(p.Cam.Limit)+0.5 <= averageSpeed {
+		speedLimit := float64(p.Cam.Limit) + 0.5
+		if speedLimit <= averageSpeed {
 
 			days := calculateDays(p.Timestamp, plate.Timestamp)
 			if DidRecieveTicket(p.PlateNumber, days) {
@@ -106,11 +111,16 @@ func ScanPlate(p *Plate) *Ticket {
 	return nil
 }
 
+// calculateDay accepts a single uint32, a unix timestamp
+// returns the current day within the timestamp
+// a day is calculated by floor(timestamp / 86400)
 func calculateDay(timestamp uint32) uint16 {
 	floatDay := float64(timestamp / 86400)
 	return uint16(floatDay)
 }
 
+// calculateDays accepts two uint32 paramaters t1, t2 which are unix timestamps.
+// it returns a slice of uint16 which is all the days that are between those 2 timestamps
 func calculateDays(t1, t2 uint32) []uint16 {
 	if t2 < t1 {
 		t2, t1 = t1, t2
@@ -126,6 +136,9 @@ func calculateDays(t1, t2 uint32) []uint16 {
 	return days
 }
 
+// PlateScanner is used as goroutine and is started at the beginning of the program
+// Every plate that is registered is channeled to this goroutine and is checked whether it should receive a ticket or not
+// The reason for a single routine to handle the scans is to avoid double scans when receiving many Plates with the same PlateNumber
 func PlateScanner(plateChan chan *Plate) {
 	for plate := range plateChan {
 		ticket := ScanPlate(plate)
@@ -143,7 +156,7 @@ func PlateScanner(plateChan chan *Plate) {
 			continue
 		}
 
-		if err := dispatcherSession.GiveTicket(ticket); err != nil {
+		if err := dispatcherSession.SendTicket(ticket); err != nil {
 			log.Println("error sending ticket: ", err)
 			continue
 		}
@@ -153,6 +166,10 @@ func PlateScanner(plateChan chan *Plate) {
 	}
 }
 
+// HandlePlate is called whenever a client sends a MessageType PLATE
+// Plate is built with a plateNumber string, timestamp uint32
+// After inserting the plate into the database it is channeled through the PlateChan for to a PlateScanner
+// Client must be a camera otherwise it sends the client an error and closes the connection
 func (s *Session) HandlePlate() error {
 	if s.ClientType != CAMERA {
 		return s.SendError("you are not a camera!")
@@ -179,6 +196,10 @@ func (s *Session) HandlePlate() error {
 	return nil
 }
 
+// HandleLostTickets accepts a chan *Ticket and chan *Session.
+// Also when a ticket is lost, it is channeled through ticketChan and is saved to a lostTickets map.
+// When a dispatcher registers it is channeled through dispatcherChan to check whether it has a LostTickets it should handle.
+// After sending all lost tickets for a specific road, those tickets are removed from the lostTickets
 func HandleLostTickets(ticketChan chan *Ticket, dispatcherChan chan *Session) {
 	lostTickets := make(map[uint16][]*Ticket)
 	for {
@@ -200,7 +221,7 @@ func HandleLostTickets(ticketChan chan *Ticket, dispatcherChan chan *Session) {
 							log.Println("Already recieved a ticket today")
 							continue
 						}
-						if err := newDispatcher.GiveTicket(ticket); err != nil {
+						if err := newDispatcher.SendTicket(ticket); err != nil {
 							newDispatcher.logln("error sending ticket", err)
 							continue
 						}
@@ -215,7 +236,9 @@ func HandleLostTickets(ticketChan chan *Ticket, dispatcherChan chan *Session) {
 	}
 }
 
-func (s *Session) GiveTicket(t *Ticket) error {
+// SendTicket accepts a *Ticket as a paramater, writes it into a buffer and sends it out to a fitting Dispatcher
+// It returns the returned error from the SendMessage
+func (s *Session) SendTicket(t *Ticket) error {
 	buf := CreateString(t.PlateNumber)
 
 	buf = binary.BigEndian.AppendUint16(buf, t.Road)
@@ -228,6 +251,8 @@ func (s *Session) GiveTicket(t *Ticket) error {
 	return s.SendMessage(TICKET, buf)
 }
 
+// HandleWantHeartBeat is called when the MessageType is WANT_HEARTBEAT
+// It reads the interval and calculates the KeepAliveRate and calls a HandleHeartBeat in a new goroutine
 func (s *Session) HandleWantHeartBeat() {
 	if s.KeepAliveRate != 0 {
 		if err := s.SendError("Too many keepalives"); err != nil {
@@ -252,6 +277,8 @@ func (s *Session) HandleWantHeartBeat() {
 	go s.HandleHeartbeat(timer)
 }
 
+// HandleHeartbeat is used as a goroutine to send keepalives to each client.
+// Each client determines its own KeepAliveRate when HandlwWantHeartNeat is called
 func (s *Session) HandleHeartbeat(timer *time.Timer) {
 	for {
 		select {
@@ -268,6 +295,10 @@ func (s *Session) HandleHeartbeat(timer *time.Timer) {
 	}
 }
 
+// IAmCamera called when a client reports itself as a Camera.
+// It Sends an error to the client if he already reported itself as a Dispatcher or a Camera
+// IAmCamera sent from the client with 3 fields: road uint16, mile uint16, limit uint16
+// It is not required to register the camera as we only read.
 func (s *Session) IAmCamera() {
 	if s.ClientType != NONE {
 		_ = s.SendError("Client type is NONE")
@@ -302,6 +333,10 @@ func (s *Session) IAmCamera() {
 
 }
 
+// IAmDispatcher is called when a client reports itself as a Dispatcher.
+// It Sends an error to the client if he already reported itself as a Dispatcher or a Camera
+// IAmDispatcher is sent from the client with 2 fields: numroads uint8, roads []uint16
+// After reading all the fields and performing validations it registers the Dispatcher in the database
 func (s *Session) IAmDispatcher() {
 	if s.ClientType != NONE {
 		_ = s.SendError("Client type is NONE")
@@ -335,6 +370,7 @@ func (s *Session) IAmDispatcher() {
 	s.logln("registered dispatcher for roads: ", roads)
 }
 
+// DidRecieveTicket reports whether the given plateNumber received a ticket in the given days
 func DidRecieveTicket(plateNumber string, days []uint16) bool {
 	tickets := GetTickets(plateNumber)
 	log.Println("Tickets: ", tickets)
